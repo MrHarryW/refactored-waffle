@@ -54,10 +54,11 @@
   <div class="drop-zone" id="dropZone">
     <p>📂 Drag & drop files here<br><strong>or</strong></p>
     <button class="upload-btn" id="uploadBtn">Choose Files</button>
-    <input type="file" id="fileInput" multiple accept=".txt,.md,.docx,.pdf" style="display:none;">
+    <input type="file" id="fileInput" multiple accept=".txt,.md,.docx" style="display:none;" aria-label="Choose text, markdown or docx files">
   </div>
   
   <div id="progress" style="display:none;">Processing your files...</div>
+  <div id="error" style="color:#c00; text-align:center; display:none;"></div>
   
   <div class="results" id="results" style="display:none;">
     <div class="pane"><h3>Original</h3><pre id="original"></pre></div>
@@ -72,11 +73,27 @@
     const uploadBtn = document.getElementById('uploadBtn');
     const progress = document.getElementById('progress');
     const results = document.getElementById('results');
+    const errorBox = document.getElementById('error');
     let originalText = '', refactoredText = '';
     let cleanedFiles = [];
 
-    // Load spellchecker – update paths if your dictionaries are elsewhere
-    const typo = new Typo('en_GB', 'dictionaries/en_GB/en_GB.aff', 'dictionaries/en_GB/en_GB.dic', { platform: 'browser' });
+    // Load spellchecker – attempt to fetch dictionaries; fall back to no-op spellchecker if missing
+    let typo = null;
+    (async function initTypo() {
+      try {
+        if (typeof Typo !== 'function') throw new Error('Typo library not loaded');
+        const affResp = await fetch('dictionaries/en_GB/en_GB.aff');
+        const dicResp = await fetch('dictionaries/en_GB/en_GB.dic');
+        if (!affResp.ok || !dicResp.ok) throw new Error('Dictionary files not found');
+        const aff = await affResp.text();
+        const dic = await dicResp.text();
+        typo = new Typo('en_GB', aff, dic, { platform: 'browser' });
+        console.info('Typo dictionary loaded');
+      } catch (err) {
+        console.warn('Typo initialization failed; spellchecking disabled.', err);
+        typo = { check: () => true, suggest: () => [] };
+      }
+    })();
 
     const dmp = new diff_match_patch();
 
@@ -105,26 +122,36 @@
 
     // Rest of the script remains the same...
     async function handleFiles(files) {
-      if (files.length === 0) return;
-      progress.style.display = 'block';
-      results.style.display = 'none';
-      cleanedFiles = [];
+      try {
+        if (files.length === 0) return;
+        progress.style.display = 'block';
+        if (errorBox) errorBox.style.display = 'none';
+        results.style.display = 'none';
+        cleanedFiles = [];
 
-      const file = files[0];
-      const text = await extractText(file);
-      originalText = text;
-      refactoredText = refactorText(text);
-      cleanedFiles.push({ name: file.name.replace(/\.[^/.]+$/, '_refactored.txt'), content: refactoredText });
+        const file = files[0];
+        const text = await extractText(file);
+        originalText = text;
+        refactoredText = refactorText(text);
+        cleanedFiles.push({ name: file.name.replace(/\.[^/.]+$/, '_refactored.txt'), content: refactoredText });
 
-      for (let i = 1; i < files.length; i++) {
-        const t = await extractText(files[i]);
-        const r = refactorText(t);
-        cleanedFiles.push({ name: files[i].name.replace(/\.[^/.]+$/, '_refactored.txt'), content: r });
+        for (let i = 1; i < files.length; i++) {
+          const t = await extractText(files[i]);
+          const r = refactorText(t);
+          cleanedFiles.push({ name: files[i].name.replace(/\.[^/.]+$/, '_refactored.txt'), content: r });
+        }
+
+        showDiff(originalText, refactoredText);
+        progress.style.display = 'none';
+        results.style.display = 'grid';
+      } catch (err) {
+        console.error(err);
+        if (errorBox) {
+          errorBox.textContent = 'Processing error: ' + (err && err.message ? err.message : String(err));
+          errorBox.style.display = 'block';
+        }
+        progress.style.display = 'none';
       }
-
-      showDiff(originalText, refactoredText);
-      progress.style.display = 'none';
-      results.style.display = 'grid';
     }
 
     async function extractText(file) {
@@ -134,8 +161,16 @@
           if (file.name.endsWith('.docx')) {
             const result = await mammoth.convertToHtml({ arrayBuffer: e.target.result });
             resolve(result.value.replace(/<[^>]*>/g, '').trim());
+          } else if (file.name.endsWith('.pdf')) {
+            // PDFs aren't supported by the in-browser text extractor in this demo
+            resolve('[PDF files are not supported in this demo]');
           } else {
-            resolve(new TextDecoder().decode(new Uint8Array(e.target.result)));
+            // Try to decode as UTF-8 text
+            try {
+              resolve(new TextDecoder().decode(new Uint8Array(e.target.result)));
+            } catch (err) {
+              resolve('');
+            }
           }
         };
         reader.readAsArrayBuffer(file);
@@ -152,11 +187,19 @@
       const words = fixed.match(/\b\w+\b/g) || [];
       words.forEach(word => {
         const lower = word.toLowerCase();
-        if (!typo.check(lower) && typo.suggest(lower).length > 0) {
-          const suggestion = typo.suggest(lower)[0];
-          const capitalized = suggestion.charAt(0).toUpperCase() + suggestion.slice(1);
-          fixed = fixed.replace(new RegExp('\\b' + word + '\\b', 'gi'), 
-            word[0] === word[0].toUpperCase() ? capitalized : suggestion);
+        try {
+          if (typo && typeof typo.check === 'function' && !typo.check(lower)) {
+            const suggestions = typeof typo.suggest === 'function' ? typo.suggest(lower) : [];
+            if (suggestions.length > 0) {
+              const suggestion = suggestions[0];
+              const capitalized = suggestion.charAt(0).toUpperCase() + suggestion.slice(1);
+              fixed = fixed.replace(new RegExp('\\b' + word + '\\b', 'gi'),
+                word[0] === word[0].toUpperCase() ? capitalized : suggestion);
+            }
+          }
+        } catch (e) {
+          // Ignore spellchecker errors and continue
+          console.warn('Spellcheck error for word', word, e);
         }
       });
 
@@ -174,6 +217,15 @@
       document.getElementById('original').textContent = orig;
       document.getElementById('refactored').innerHTML = html;
     }
+
+    window.addEventListener('error', e => {
+      console.error(e.error || e.message || e);
+      if (errorBox) {
+        errorBox.textContent = 'An unexpected error occurred: ' + (e.message || e.error || '');
+        errorBox.style.display = 'block';
+      }
+      progress.style.display = 'none';
+    });
 
     document.getElementById('downloadBtn').onclick = () => {
       const zip = new JSZip();
