@@ -12,73 +12,110 @@
     body { font-family: system-ui, sans-serif; max-width: 1200px; margin: 2rem auto; padding: 1rem; background: #f8f9fa; color: #212529; }
     @media (prefers-color-scheme: dark) { body { background: #121212; color: #e0e0e0; } }
     h1 { text-align: center; }
-    .drop-zone { border: 4px dashed #adb5bd; border-radius: 1rem; padding: 4rem; text-align: center; cursor: pointer; transition: 0.3s; background: #e9ecef; }
+    .drop-zone { 
+      border: 4px dashed #adb5bd; 
+      border-radius: 1rem; 
+      padding: 4rem; 
+      text-align: center; 
+      cursor: pointer; 
+      transition: 0.3s; 
+      background: #e9ecef; 
+    }
     .drop-zone.dragover { border-color: #0d6efd; background: #cfe2ff; }
-    @media (prefers-color-scheme: dark) { .drop-zone { background: #343a40; } .drop-zone.dragover { background: #0d47a1; } }
+    @media (prefers-color-scheme: dark) { 
+      .drop-zone { background: #343a40; } 
+      .drop-zone.dragover { background: #0d47a1; } 
+    }
+    .upload-btn {
+      background: #0d6efd; 
+      color: white; 
+      border: none; 
+      padding: 1rem 2rem; 
+      font-size: 1.2rem; 
+      border-radius: 0.5rem; 
+      cursor: pointer; 
+      margin-top: 1rem;
+    }
+    .upload-btn:hover { background: #0b5ed7; }
     .results { margin-top: 2rem; display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
     .pane { border: 1px solid #dee2e6; padding: 1rem; height: 70vh; overflow: auto; background: white; border-radius: 0.5rem; }
     @media (prefers-color-scheme: dark) { .pane { background: #1e1e1e; border-color: #444; } }
     .diff ins { background: #d1e7dd; text-decoration: none; }
     .diff del { background: #f8d7da; text-decoration: line-through; }
-    button { background: #0d6efd; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 0.5rem; cursor: pointer; margin-top: 1rem; }
-    button:hover { background: #0b5ed7; }
+    button.download { background: #0d6efd; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 0.5rem; cursor: pointer; margin-top: 1rem; }
+    button.download:hover { background: #0b5ed7; }
     #progress { text-align: center; margin: 1rem 0; font-style: italic; }
   </style>
 </head>
 <body>
   <h1>🧇 Refactored Waffle</h1>
-  <p style="text-align:center;">Drag & drop TXT, MD, or DOCX files. Fixes spelling (British English), punctuation spacing, capitalization, and trims extras. 100% private – runs in your browser!</p>
+  <p style="text-align:center;">Upload TXT, MD, or DOCX files. Fixes British English spelling, punctuation spacing, capitalization, and more. 100% private – everything runs in your browser!</p>
   
   <div class="drop-zone" id="dropZone">
-    <p>📂 Drop files here (multiple OK)</p>
+    <p>📂 Drag & drop files here<br><strong>or</strong></p>
+    <button class="upload-btn" id="uploadBtn">Choose Files</button>
     <input type="file" id="fileInput" multiple accept=".txt,.md,.docx,.pdf" style="display:none;">
   </div>
   
-  <div id="progress" style="display:none;">Processing...</div>
+  <div id="progress" style="display:none;">Processing your files...</div>
   
   <div class="results" id="results" style="display:none;">
     <div class="pane"><h3>Original</h3><pre id="original"></pre></div>
     <div class="pane"><h3>Refactored 🧇</h3><pre id="refactored"></pre>
-      <button id="downloadBtn">💾 Download All Cleaned (ZIP)</button>
+      <button class="download" id="downloadBtn">💾 Download All Cleaned (ZIP)</button>
     </div>
   </div>
 
   <script>
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
+    const uploadBtn = document.getElementById('uploadBtn');
     const progress = document.getElementById('progress');
     const results = document.getElementById('results');
     let originalText = '', refactoredText = '';
-    let cleanedFiles = []; // {name, content}
+    let cleanedFiles = [];
 
-    // Load spellchecker (adjust path if dictionaries are in repo)
+    // Load spellchecker – update paths if your dictionaries are elsewhere
     const typo = new Typo('en_GB', 'dictionaries/en_GB/en_GB.aff', 'dictionaries/en_GB/en_GB.dic', { platform: 'browser' });
 
     const dmp = new diff_match_patch();
 
+    // Click button → open file explorer
+    uploadBtn.addEventListener('click', (e) => {
+      e.stopPropagation(); // Prevent triggering dropZone click
+      fileInput.click();
+    });
+
+    // Click anywhere else in drop zone → also open file explorer
     dropZone.addEventListener('click', () => fileInput.click());
+
+    // Drag & drop visual feedback
     ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(ev => {
       dropZone.addEventListener(ev, e => { e.preventDefault(); e.stopPropagation(); });
     });
     dropZone.addEventListener('dragenter', () => dropZone.classList.add('dragover'));
     dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
-    dropZone.addEventListener('drop', e => { dropZone.classList.remove('dragover'); handleFiles(e.dataTransfer.files); });
+    dropZone.addEventListener('drop', e => {
+      dropZone.classList.remove('dragover');
+      handleFiles(e.dataTransfer.files);
+    });
+
+    // File input change (from button or click)
     fileInput.addEventListener('change', e => handleFiles(e.target.files));
 
+    // Rest of the script remains the same...
     async function handleFiles(files) {
       if (files.length === 0) return;
       progress.style.display = 'block';
       results.style.display = 'none';
       cleanedFiles = [];
 
-      // Process first file for display (MVP: show one at a time; extend for tabs later)
       const file = files[0];
       const text = await extractText(file);
       originalText = text;
       refactoredText = refactorText(text);
       cleanedFiles.push({ name: file.name.replace(/\.[^/.]+$/, '_refactored.txt'), content: refactoredText });
 
-      // Process others in background
       for (let i = 1; i < files.length; i++) {
         const t = await extractText(files[i]);
         const r = refactorText(t);
@@ -96,7 +133,7 @@
         reader.onload = async e => {
           if (file.name.endsWith('.docx')) {
             const result = await mammoth.convertToHtml({ arrayBuffer: e.target.result });
-            resolve(result.value.replace(/<[^>]*>/g, '')); // Strip HTML tags for plain text
+            resolve(result.value.replace(/<[^>]*>/g, '').trim());
           } else {
             resolve(new TextDecoder().decode(new Uint8Array(e.target.result)));
           }
@@ -107,18 +144,19 @@
 
     function refactorText(text) {
       let fixed = text
-        .replace(/([.!?])\s{2,}/g, '$1 ')  // One space after sentence end
-        .replace(/\s+/g, ' ')             // Collapse multiple spaces
-        .replace(/^\s+|\s+$/g, '')        // Trim
-        .replace(/(^|[.!?]\s+)([a-z])/g, (m, p, l) => p + l.toUpperCase()); // Capitalize sentences
+        .replace(/([.!?])\s{2,}/g, '$1 ')
+        .replace(/\s+/g, ' ')
+        .replace(/^\s+|\s+$/g, '')
+        .replace(/(^|[.!?]\s+)([a-z])/g, (m, p, l) => p + l.toUpperCase());
 
-      // Spelling corrections
       const words = fixed.match(/\b\w+\b/g) || [];
       words.forEach(word => {
         const lower = word.toLowerCase();
         if (!typo.check(lower) && typo.suggest(lower).length > 0) {
           const suggestion = typo.suggest(lower)[0];
-          fixed = fixed.replace(new RegExp('\\b' + word + '\\b', 'gi'), suggestion.charAt(0).toUpperCase() + suggestion.slice(1));
+          const capitalized = suggestion.charAt(0).toUpperCase() + suggestion.slice(1);
+          fixed = fixed.replace(new RegExp('\\b' + word + '\\b', 'gi'), 
+            word[0] === word[0].toUpperCase() ? capitalized : suggestion);
         }
       });
 
